@@ -48,7 +48,7 @@ jobs:
           mkdir -p app/src/main/res/values
 
           cp index.html app/src/main/assets/index.html
-          cp -R assets/. app/src/main/assets/
+          
           cat > settings.gradle <<'EOF'
           pluginManagement {
               repositories {
