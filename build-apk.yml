@@ -1,0 +1,229 @@
+name: Build Jivan Pawar Calculator APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-apk.yml'
+      - 'index.html'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check calculator source and extract embedded logo
+        run: |
+          test -f index.html || { echo "index.html not found in repository root"; exit 1; }
+          python3 - <<'PY'
+          import re, base64, pathlib
+          html = pathlib.Path("index.html").read_text(encoding="utf-8")
+          # Prefer the actual header logo image; fall back to the embedded favicon.
+          match = re.search(r'<img[^>]+src="data:image/[^;]+;base64,([A-Za-z0-9+/=]+)"', html, re.I)
+          if not match:
+              match = re.search(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', html)
+          if not match:
+              raise SystemExit("No embedded logo found in index.html. Keep the logo embedded in the HTML.")
+          data = base64.b64decode(match.group(1))
+          pathlib.Path("logo-image").write_bytes(data)
+          print(f"Embedded logo extracted ({len(data)} bytes).")
+          PY
+
+      - name: Create Android app project from this one workflow file
+        run: |
+          mkdir -p app/src/main/assets app/src/main/java/com/jivanpawar/calculator app/src/main/res/values
+          cp index.html app/src/main/assets/index.html
+          # Connect the calculator's CSV and print buttons to Android's native save/print services.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/assets/index.html")
+          h = p.read_text(encoding="utf-8")
+          h = h.replace('onclick="window.print()"',
+                        'onclick="(window.Android&&Android.printPage)?Android.printPage():window.print()"')
+          old = """let keys=Object.keys(rows[0]),csv=[keys.join(','),...rows.map(r=>keys.map(k=>r[k]).join(','))].join('\\\\n'),blob=new Blob([csv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Jivan-Pawar-'+type+'-report.csv';a.click();URL.revokeObjectURL(a.href)"""
+          new = """let keys=Object.keys(rows[0]),csv=[keys.join(','),...rows.map(r=>keys.map(k=>r[k]).join(','))].join('\\\\n');if(window.Android&&Android.saveCsv){Android.saveCsv(csv)}else{let blob=new Blob([csv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Jivan-Pawar-'+type+'-report.csv';a.click();URL.revokeObjectURL(a.href)}"""
+          if old in h:
+              h = h.replace(old, new)
+          else:
+              print("Notice: CSV function signature differs; browser CSV download will remain enabled.")
+          p.write_text(h, encoding="utf-8")
+          PY
+          cat > settings.gradle <<'EOF"
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "JivanPawarCalculator"
+          include(":app")
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.6.1' apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.jivanpawar.calculator'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.jivanpawar.calculator'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="Jivan Pawar Calculator"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="false"
+                  android:theme="@style/AppTheme">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#FFD12E</item>
+                  <item name="android:statusBarColor">#050505</item>
+                  <item name="android:navigationBarColor">#050505</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+          </resources>
+          EOF
+          cat > app/src/main/java/com/jivanpawar/calculator/MainActivity.java <<'EOF'
+          package com.jivanpawar.calculator;
+
+          import android.app.Activity;
+          import android.app.PrintManager;
+          import android.content.ContentValues;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+          import android.print.PrintAttributes;
+          import java.io.OutputStream;
+          import java.nio.charset.StandardCharsets;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  webView = new WebView(this);
+                  webView.setBackgroundColor(0xFF050505);
+                  webView.getSettings().setJavaScriptEnabled(true);
+                  webView.getSettings().setDomStorageEnabled(true);
+                  webView.addJavascriptInterface(new Bridge(), "Android");
+                  webView.setWebChromeClient(new WebChromeClient());
+                  webView.setWebViewClient(new WebViewClient());
+                  setContentView(webView);
+                  webView.loadUrl("file:///android_asset/index.html");
+              }
+              private class Bridge {
+                  @JavascriptInterface public void saveCsv(String csv) {
+                      runOnUiThread(() -> {
+                          try {
+                              ContentValues v = new ContentValues();
+                              v.put(MediaStore.Downloads.DISPLAY_NAME, "Jivan-Pawar-Calculator.csv");
+                              v.put(MediaStore.Downloads.MIME_TYPE, "text/csv");
+                              v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                              Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                              if (uri == null) throw new Exception("File could not be created");
+                              try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                                  out.write(csv.getBytes(StandardCharsets.UTF_8));
+                              }
+                              Toast.makeText(MainActivity.this, "CSV saved in Downloads", Toast.LENGTH_LONG).show();
+                          } catch (Exception e) {
+                              Toast.makeText(MainActivity.this, "CSV save failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                          }
+                      });
+                  }
+                  @JavascriptInterface public void printPage() {
+                      runOnUiThread(() -> {
+                          PrintManager pm = (PrintManager)getSystemService(PRINT_SERVICE);
+                          pm.print("Jivan Pawar Calculator Report",
+                              webView.createPrintDocumentAdapter("Jivan Pawar Report"),
+                              new PrintAttributes.Builder().build());
+                      });
+                  }
+              }
+              @Override public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) webView.goBack();
+                  else super.onBackPressed();
+              }
+          }
+          EOF
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          from pathlib import Path
+          import io
+          raw = Path("logo-image").read_bytes()
+          im = Image.open(io.BytesIO(raw)).convert("RGB")
+          w,h=im.size
+          side=min(w,h)
+          im=im.crop(((w-side)//2,(h-side)//2,(w+side)//2,(h+side)//2))
+          for density,size in [("mdpi",48),("hdpi",72),("xhdpi",96),("xxhdpi",144),("xxxhdpi",192)]:
+              p=Path(f"app/src/main/res/mipmap-{density}")
+              p.mkdir(parents=True,exist_ok=True)
+              icon=im.resize((size,size),Image.Resampling.LANCZOS)
+              mask=Image.new("L",(size,size),0)
+              ImageDraw.Draw(mask).ellipse((1,1,size-2,size-2),fill=255)
+              rgba=icon.convert("RGBA")
+              rgba.putalpha(mask)
+              rgba.save(p/"ic_launcher.png")
+          PY
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          gradle --no-daemon assembleDebug
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jivan-Pawar-Calculator-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
