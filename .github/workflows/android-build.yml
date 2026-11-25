@@ -6,13 +6,8 @@ on:
     branches:
       - main
     paths:
-      - 'index.html'
-      - 'app/**'
-      - 'build.gradle*'
-      - 'settings.gradle*'
-      - 'gradle/**'
-      - 'gradlew'
-      - 'gradle.properties'
+      - 'index-flow-updated (2).html'
+      - 'assets/**'
       - '.github/workflows/android-build.yml'
 
 permissions:
@@ -22,6 +17,7 @@ jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,16 +27,137 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          cache-disabled: true
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew
+      - name: Create Android WebView project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HTML_FILE="index-flow-updated (2).html"
+          test -f "$HTML_FILE" || {
+            echo "ERROR: $HTML_FILE was not found in the repository root."
+            exit 1
+          }
+
+          mkdir -p app/src/main/assets app/src/main/java/com/jivanpaw/ar/calculator
+          cp "$HTML_FILE" app/src/main/assets/index.html
+
+          if [ -d assets ]; then
+            cp -R assets/. app/src/main/assets/
+          fi
+
+          cat > settings.gradle <<'GRADLE'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "JivanPawarCalculator"
+          include(":app")
+          GRADLE
+
+          cat > build.gradle <<'GRADLE'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          GRADLE
+
+          cat > gradle.properties <<'GRADLE'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          GRADLE
+
+          cat > app/build.gradle <<'GRADLE'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.jivanpaw.ar.calculator'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.jivanpaw.ar.calculator'
+                  minSdk 23
+                  targetSdk 28
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          GRADLE
+
+          cat > app/src/main/AndroidManifest.xml <<'XML'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="Jivan Pawar Calculator"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          XML
+
+          cat > app/src/main/java/com/jivanpaw/ar/calculator/MainActivity.java <<'JAVA'
+          package com.jivanpaw.ar.calculator;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  setContentView(webView);
+                  webView.getSettings().setJavaScriptEnabled(true);
+                  webView.getSettings().setDomStorageEnabled(true);
+                  webView.getSettings().setAllowFileAccess(true);
+                  webView.getSettings().setAllowContentAccess(true);
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient());
+                  webView.loadUrl("file:///android_asset/index.html");
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          JAVA
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: gradle --no-daemon assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -49,4 +166,3 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
-
