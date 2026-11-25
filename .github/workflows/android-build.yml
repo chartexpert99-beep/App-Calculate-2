@@ -4511,6 +4511,9 @@ jobs:
               icon.save(folder / 'ic_launcher.png', optimize=True)
               icon.save(folder / 'ic_launcher_round.png', optimize=True)
           PYICON
+          # Remove generated adaptive-icon XML so Android uses the new density PNGs.
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
 
       - name: Build debug APK
         run: |
