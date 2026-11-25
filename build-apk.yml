@@ -1,0 +1,281 @@
+name: Build Jivan Pawar Calculator APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check calculator source
+        shell: bash
+        run: |
+          test -s index.html
+          grep -qi "Jivan Pawar" index.html
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Install image library
+        run: python3 -m pip install --user Pillow
+
+      - name: Generate Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/java/com/jivanpaw/calculator
+          mkdir -p app/src/main/res/values
+
+          cp index.html app/src/main/assets/index.html
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "JivanPawarCalculator"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+              id 'org.jetbrains.kotlin.android' version '2.0.21' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.jivanpaw.calculator'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.jivanpaw.calculator'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="Jivan Pawar Calculator"
+                  android:theme="@style/AppTheme"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
+                  <item name="android:statusBarColor">#000000</item>
+                  <item name="android:navigationBarColor">#000000</item>
+                  <item name="android:colorAccent">#FFD12E</item>
+                  <item name="android:windowActionModeOverlay">true</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/java/com/jivanpaw/calculator/MainActivity.kt <<'EOF'
+          package com.jivanpaw.calculator
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.os.Bundle
+          import android.print.PrintAttributes
+          import android.print.PrintManager
+          import android.webkit.JavascriptInterface
+          import android.webkit.WebChromeClient
+          import android.webkit.WebSettings
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+
+          class MainActivity : Activity() {
+              private lateinit var webView: WebView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = android.graphics.Color.BLACK
+                  window.navigationBarColor = android.graphics.Color.BLACK
+
+                  webView = WebView(this)
+                  webView.setBackgroundColor(android.graphics.Color.BLACK)
+                  webView.settings.javaScriptEnabled = true
+                  webView.settings.domStorageEnabled = true
+                  webView.settings.allowFileAccess = true
+                  webView.settings.allowContentAccess = true
+                  webView.settings.cacheMode = WebSettings.LOAD_DEFAULT
+                  webView.addJavascriptInterface(AndroidBridge(), "AndroidApp")
+                  webView.webChromeClient = WebChromeClient()
+                  webView.webViewClient = object : WebViewClient() {
+                      override fun onPageFinished(view: WebView?, url: String?) {
+                          view?.evaluateJavascript(
+                              "window.print=function(){AndroidApp.printPage();};",
+                              null
+                          )
+                      }
+                  }
+
+                  setContentView(webView)
+                  webView.loadUrl("file:///android_asset/index.html")
+              }
+
+              inner class AndroidBridge {
+                  @JavascriptInterface
+                  fun printPage() {
+                      runOnUiThread {
+                          val printManager = getSystemService(PRINT_SERVICE) as PrintManager
+                          printManager.print(
+                              "Jivan Pawar Financial Report",
+                              webView.createPrintDocumentAdapter("Jivan Pawar Report"),
+                              PrintAttributes.Builder().build()
+                          )
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun shareText(value: String) {
+                      runOnUiThread {
+                          val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                              type = "text/plain"
+                              putExtra(Intent.EXTRA_TEXT, value)
+                          }
+                          startActivity(Intent.createChooser(shareIntent, "Share report"))
+                      }
+                  }
+              }
+
+              @Deprecated("Deprecated in Android")
+              override fun onBackPressed() {
+                  if (::webView.isInitialized && webView.canGoBack()) {
+                      webView.goBack()
+                  } else {
+                      super.onBackPressed()
+                  }
+              }
+          }
+          EOF
+
+          # Use an embedded data-URI favicon from index.html as the launcher icon.
+          # If none exists, generate a simple black-and-gold JP icon.
+          python3 - <<'PY'
+          import base64
+          import io
+          import os
+          import re
+          from PIL import Image, ImageDraw, ImageFont
+
+          with open("index.html", encoding="utf-8") as f:
+              html = f.read()
+
+          icon = None
+          patterns = [
+              r'<link[^>]+rel=["\'][^"\']*icon[^"\']*["\'][^>]+href=["\']data:image/[^;]+;base64,([^"\']+)',
+              r'<link[^>]+href=["\']data:image/[^;]+;base64,([^"\']+)["\'][^>]+rel=["\'][^"\']*icon[^"\']*["\']'
+          ]
+          for pattern in patterns:
+              match = re.search(pattern, html, re.IGNORECASE)
+              if match:
+                  try:
+                      icon = Image.open(io.BytesIO(base64.b64decode(match.group(1)))).convert("RGBA")
+                      break
+                  except Exception:
+                      icon = None
+
+          if icon is None:
+              icon = Image.new("RGBA", (512, 512), "#050505")
+              draw = ImageDraw.Draw(icon)
+              draw.ellipse((14, 14, 498, 498), outline="#FFD12E", width=18)
+              try:
+                  font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 150)
+              except Exception:
+                  font = ImageFont.load_default()
+              draw.text((256, 245), "JP", fill="#FFD12E", font=font, anchor="mm")
+
+          for density, size in [
+              ("mdpi", 48),
+              ("hdpi", 72),
+              ("xhdpi", 96),
+              ("xxhdpi", 144),
+              ("xxxhdpi", 192)
+          ]:
+              folder = f"app/src/main/res/mipmap-{density}"
+              os.makedirs(folder, exist_ok=True)
+              icon.resize((size, size), Image.Resampling.LANCZOS).save(
+                  os.path.join(folder, "ic_launcher.png")
+              )
+          PY
+
+          gradle wrapper --gradle-version 8.9
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jivan-Pawar-Calculator-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
